@@ -702,3 +702,379 @@
     offset=log(p) + log(A) + log(q))
 
 }
+
+
+setClassUnion("df_or_NULL", c("data.frame", "NULL"))
+setClassUnion("list_or_NULL", c("list", "NULL"))
+
+# The CAM class
+setClass("wt_CAM",
+         slots = list(
+           main = "df_or_NULL",
+           project = "df_or_NULL",
+           location = "df_or_NULL",
+           image_report = "df_or_NULL",
+           image_set_report = "df_or_NULL",
+           tag = "df_or_NULL",
+           megadetector = "df_or_NULL",
+           definitions = "list_or_NULL"
+         )
+)
+
+setValidity("wt_CAM", function(object) {
+  slots_to_check <- c(
+    "main", "project", "location",
+    "image_report", "image_set_report",
+    "tag", "megadetector",
+    "definitions"
+  )
+  # Check that there is at least
+  #  one element that is not NULL within the
+  #  object. This is essentially 'forced'
+  #  when using wt_download_report(), but
+  #  adding just in case someone tries
+  #  to create the class downstream.
+  values <- lapply(slots_to_check, function(s) slot(object, s))
+
+  if (all(vapply(values, is.null, logical(1)))) {
+    return("At least one data slot must be non-NULL.")
+  }
+
+  return(TRUE)
+})
+
+### Class generation and checks ####
+
+# hidden functions for the various reports.
+# These functions check to see if the
+#  columns are present and that their
+#  classes are correct. We are adding
+#  these here (instead of via
+#  setValidity) because we can
+#  have more verbose errors this
+#  way.
+.validate_col_classes <- function(df, column_class_list) {
+
+  bad_cols <- vapply(names(column_class_list), function(col) {
+
+    expected_class <- column_class_list[[col]]
+    actual_class <- class(df[[col]])[1]
+
+    # allow multiple acceptable classes
+    if (length(expected_class) > 1) {
+      !any(vapply(expected_class, function(cls) inherits(df[[col]], cls), logical(1)))
+    } else {
+      !inherits(df[[col]], expected_class)
+    }
+
+  }, logical(1))
+
+  if (any(bad_cols)) {
+
+    bad_names <- names(column_class_list)[bad_cols]
+
+    msg <- paste0(
+      "Columns with incorrect classes:\n",
+      paste(
+        sprintf(
+          "  - %s (expected: %s, actual: %s)",
+          bad_names,
+          vapply(column_class_list[bad_names], function(x) paste(x, collapse = "/"), character(1)),
+          vapply(df[bad_names], function(x) class(x)[1], character(1))
+        ),
+        collapse = "\n"
+      )
+    )
+
+    stop(msg, call. = FALSE)
+  }
+
+  TRUE
+}
+
+.check_missing_cols <- function(df, required_cols, slot_name) {
+  missing_cols <- setdiff(
+    names(required_cols),
+    names(df)
+  )
+
+  if (length(missing_cols) > 0) {
+    stop(
+      paste0("`", slot_name, "` is missing required columns: ",
+             paste(missing_cols, collapse = ", ")),
+      call. = FALSE
+    )
+  }
+
+  invisible(TRUE)
+}
+
+.verify_main_cam <- function(df){
+
+  # At the moment just requiring
+  #  all of these. We may want
+  #  to have some be optional I
+  #  guess? But at the moment I
+  #  am unsure which ones I'd
+  #  want to do that with. Also,
+  #  specifying the class for
+  #  each object so we can
+  #  confirm that as well.
+
+  main_cam_cols_and_classes <- list(
+    project_id = "integer",
+    location = "character",
+    location_id = "integer",
+    latitude = "numeric",
+    longitude = "numeric",
+    location_buffer_m = "numeric",
+    equipment_serial = "character",
+    image_id = "integer",
+    image_date_time = "POSIXct",
+    image_set_id = "numeric",
+    series_no_at_gap = "character",
+    image_fov = "character",
+    image_snow = "logical",
+    image_snow_depth_m = "numeric",
+    image_water_depth_m = "numeric",
+    species_scientific_name = "character",
+    species_common_name = "character",
+    individual_count = c("integer", "character"),
+    age_class = "character",
+    sex_class = "logical",
+    behaviours = "character",
+    health_diseases = "character",
+    coat_colours = "character",
+    coat_attributes = "character",
+    tine_attributes = "character",
+    direction_travel = "character",
+    has_collar = "logical",
+    has_eartag = "logical",
+    ihf = "character",
+    observer = "character",
+    observer_id = "integer",
+    tag_comments = "character",
+    tag_needs_review = "logical",
+    tag_is_verified = "logical",
+    image_in_wildtrax = "logical",
+    tag_id = "integer"
+  )
+
+  missing_col_check <- .check_missing_cols(
+    df = df,
+    required_cols = main_cam_cols_and_classes,
+    slot_name = "main"
+  )
+
+  # Now check the classes of the columns
+  class_check <- .validate_col_classes(
+    df = df,
+    column_class_list = main_cam_cols_and_classes
+  )
+
+  # Give warnings if lat / long are outside
+  #  of their respective bounds.
+  if (any(df$latitude < -90 | df$latitude > 90, na.rm = TRUE)) {
+    warning(
+      "`latitude` are outside of [-90,90], please update `latitude` coordinates in WildTrax.",
+      call. = FALSE
+    )
+  }
+  if (any(df$longitude < -180 | df$longitude > 180, na.rm = TRUE)) {
+    warning(
+      "`longitude` are outside of [-180,180], please update `longitude` coordinates in WildTrax.",
+      call. = FALSE
+    )
+  }
+  if(any(is.na(df$longitude)) || any(is.na(df$latitude))){
+    warning(
+      "Some `latitude` and/or `longitude` elements are missing. Please add them to WildTrax.",
+      call. = FALSE
+    )
+  }
+
+  if (any(df$image_date_time < as.POSIXct("1995-01-01", tz = "UTC"), na.rm = TRUE)) {
+    warning("Some `image_date_time` values are before 1995 (EXIF standard). Please verify.", call. = FALSE)
+  }
+
+  if (any(df$image_date_time > Sys.time(), na.rm = TRUE)) {
+    warning("Some `image_date_time` values are in the future. Please verify", call. = FALSE)
+  }
+
+  # if everything works, then return an
+  #  invisible TRUE
+  return(invisible(TRUE))
+}
+
+setValidity("wt_CAM", function(object) {
+  slots_to_check <- c(
+    "main", "project", "location",
+    "image_report", "image_set_report",
+    "tag", "megadetector",
+    "definitions"
+  )
+  # Check that there is at least
+  #  one element that is not NULL within the
+  #  object. This is essentially 'forced'
+  #  when using wt_download_report(), but
+  #  adding just in case someone tries
+  #  to create the class downstream.
+  values <- lapply(slots_to_check, function(s) slot(object, s))
+
+  if (all(vapply(values, is.null, logical(1)))) {
+    return("At least one data slot must be non-NULL.")
+  }
+
+  return(TRUE)
+})
+
+
+# verify project cam
+.verify_project_cam <- function(df) {
+
+  project_cam_cols_and_classes <- list(
+    organization = "character",
+    project = "character",
+    project_id = "integer",
+    project_status = "character",
+    project_description = "character",
+    project_results = "character"
+  )
+
+  missing_col_check <- .check_missing_cols(
+    df = df,
+    required_cols = project_cam_cols_and_classes,
+    slot_name = "project"
+  )
+
+  .validate_col_classes(
+    df = df,
+    column_class_list = project_cam_cols_and_classes
+  )
+
+  # Return TRUE invisibly
+  invisible(TRUE)
+}
+
+
+
+.verify_location_cam <- function(df) {
+
+  location_cam_cols_and_classes <- list(
+    organization = "character",
+    location = "character",
+    location_id = "integer",
+    location_buffer_m = "numeric",
+    latitude = "numeric",
+    longitude = "numeric",
+    location_visibility = "character",
+    elevation = "numeric",
+    location_comments = "character"
+  )
+
+  missing_col_check <- .check_missing_cols(
+    df = df,
+    required_cols = location_cam_cols_and_classes,
+    slot_name = "location"
+  )
+
+  .validate_col_classes(
+    df = df,
+    column_class_list = location_cam_cols_and_classes
+  )
+
+  if (any(df$latitude < -90 | df$latitude > 90, na.rm = TRUE)) {
+    warning("Some `latitude` values are outside [-90, 90], please update them in WildTrax.", call. = FALSE)
+  }
+
+  if (any(df$longitude < -180 | df$longitude > 180, na.rm = TRUE)) {
+    warning("Some `longitude` values are outside [-180, 180], please update them in WildTrax.", call. = FALSE)
+  }
+
+  # Return TRUE invisibly
+  invisible(TRUE)
+}
+
+.verify_image_report_cam <- function(df) {
+
+  image_report_cam_cols_and_classes <- list(
+    project_id = "integer",
+    location = "character",
+    location_id = "integer",
+    image_id = "integer",
+    image_date_time = "POSIXct",
+    source_file_name = "character",
+    equipment_make = "character",
+    equipment_model = "character",
+    equipment_serial = "character",
+    image_fire = "logical",
+    image_nice = "logical",
+    image_malfunction = "logical",
+    image_set_id = "numeric",
+    image_fov = "character",
+    image_snow = "logical",
+    image_snow_depth_m = "numeric",
+    image_water_depth_m = "numeric",
+    image_trigger_mode = "character",
+    image_is_blurred = "logical",
+    media_url = "character",
+    image_in_wildtrax = "logical",
+    image_comments = "character"
+  )
+
+  missing_col_check <- .check_missing_cols(
+    df = df,
+    required_cols = image_report_cam_cols_and_classes,
+    slot_name = "image_report"
+  )
+
+  .validate_col_classes(
+    df = df,
+    column_class_list = image_report_cam_cols_and_classes
+  )
+
+  if (any(df$image_date_time < as.POSIXct("1995-01-01", tz = "UTC"), na.rm = TRUE)) {
+    warning("Some `image_date_time` values are before 1995 (EXIF standard). Please verify.", call. = FALSE)
+  }
+
+  if (any(df$image_date_time > Sys.time(), na.rm = TRUE)) {
+    warning("Some `image_date_time` values are in the future. Please verify", call. = FALSE)
+  }
+
+  invisible(TRUE)
+}
+
+# to do: image set report, tag, megadetector,
+#  and definitions.
+
+# constructor for wt_CAM objects
+wt_CAM <- function(main, project, location,
+                   image_report, image_set_report,
+                   tag, megadetector, definitions){
+
+  if(!is.null(main)){
+    .validate_main_cam(main)
+  }
+
+  if(!is.null(project)){
+    .validate_project_cam(project)
+  }
+  if(!is.null(location)){
+    .validate_location_cam(location)
+  }
+
+  new_wt_CAM_object <- new(
+    "wt_CAM",
+    main = main,
+    project = project,
+    location = location,
+    image_report = image_report,
+    image_set_report = image_set_report,
+    tag = tag,
+    megadetector = megadetector,
+    definitions = definitions
+  )
+  validObject(new_wt_CAM_object)
+
+  return(new_wt_CAM_object)
+}
