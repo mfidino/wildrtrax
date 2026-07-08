@@ -76,29 +76,31 @@ wt_image_paths <- function(
   )
   return(to_return)
 }
-
 #' Summarize the folder hierarchy of file paths
 #'
-#' Parses file paths and summarizes the folder hierarchy. The function
-#' checks whether all files occur at the same folder depth and, when they do,
-#' prints the folder hierarchy for the first file path.
+#' Summarizes the folder hierarchy represented by a set of image file paths.
+#' The function prints the folder levels common to all paths, helping users
+#' identify which directory level corresponds to grouping variables (e.g.,
+#' sites) prior to downstream processing.
 #'
 #' @param paths A character vector of file paths, typically produced by
 #'   [wt_image_paths()].
 #' @param path_split Character string used to split file paths into their
-#'   component folders. If `NULL`, defaults to the operating system's file separator.
+#'   component folders. If `NULL`, defaults to the operating system's file
+#'   separator.
 #'
 #' @details
-#' This function is intended to help users understand the structure of image
-#' directories prior to grouping images by site for downstream processing in
-#' `wildrtrax`.
+#' This function is intended to help users understand the directory structure
+#' of image datasets before extracting grouping variables with
+#' [wt_extract_folder_level()].
 #'
-#' The function first checks whether all file paths occur at the same folder
-#' depth (i.e., the number of sub-folders in each file path).
-#' If folder depths differ, a warning is issued reporting the observed
-#' depths. If all paths have the same depth, the folder hierarchy for the
-#' first file path is printed, allowing users to identify which directory
-#' levels correspond to grouping variables of interest.
+#' If all file paths have the same folder depth, the complete folder hierarchy
+#' is printed using an example path. If folder depths differ, a warning is
+#' issued reporting the observed depths, and only the folder levels common to
+#' all paths (i.e., up to the minimum folder depth) are displayed. This
+#' accommodates datasets where some images are stored in additional
+#' subdirectories while preserving the common hierarchy shared across all
+#' images.
 #'
 #' @return
 #' No value is returned.
@@ -124,27 +126,32 @@ wt_path_summary <- function(
       call. = FALSE
     )
   }
+
   if(anyNA(paths)){
     stop(
       "`paths` cannot contain missing values.",
       call. = FALSE
     )
   }
-  if (length(paths) == 0) {
+
+  if(length(paths) == 0){
     stop(
       "`paths` contains no file paths.",
       call. = FALSE
     )
   }
+
   if(is.null(path_split)){
     path_split <- .Platform$file.sep
   } else {
-    if ( (!is.character(path_split) || length(path_split) != 1)) {
+
+    if(!is.character(path_split) || length(path_split) != 1){
       stop(
         "`path_split` must be NULL or a single character string.",
         call. = FALSE
       )
     }
+
   }
 
   path_summary <- strsplit(
@@ -155,7 +162,10 @@ wt_path_summary <- function(
 
   path_lengths <- lengths(path_summary)
 
-  if(length(unique(path_lengths)) != 1){
+  min_depth <- min(path_lengths)
+  max_depth <- max(path_lengths)
+
+  if(min_depth != max_depth){
 
     warning(
       "Not all files have the same folder depth.\n",
@@ -164,6 +174,10 @@ wt_path_summary <- function(
         sort(unique(path_lengths)),
         collapse = ", "
       ),
+      ".\n",
+      "The hierarchy below is shown only to the minimum folder depth (",
+      min_depth,
+      " levels). Additional folder levels may occur after those shown.",
       call. = FALSE
     )
 
@@ -172,25 +186,28 @@ wt_path_summary <- function(
     cat(
       sprintf(
         "All files occur at the same depth (%i levels).\n\n",
-        unique(path_lengths)
+        min_depth
       )
     )
-    cat("\n")
-    cat("\nFolder hierarchy (example path):\n\n")
-
-    for(i in seq_along(path_summary[[1]])){
-      cat(
-        sprintf(
-          "Level %i: %s\n",
-          i,
-          path_summary[[1]][i]
-        )
-      )
-    }
 
   }
 
+  example_path <- which.min(path_lengths)
+
+  cat("Folder hierarchy (example path):\n\n")
+
+  for(i in seq_len(min_depth)){
+    cat(
+      sprintf(
+        "Level %i: %s\n",
+        i,
+        path_summary[[example_path]][i]
+      )
+    )
+  }
+
   invisible(NULL)
+
 }
 
 #' Extract a folder level from file paths
@@ -663,36 +680,6 @@ wt_check_datetime_jan1 <- function(
 
 }
 
-#' Identify groups with constant image datetimes
-#'
-#' Internal helper function used by [wt_image_check()] to identify groups where
-#' all images have the same datetime, which may indicate an incorrectly set
-#' camera clock.
-#' @keywords internal
-wt_check_datetime_constant <- function(
-    x
-){
-
-  bad <- tapply(
-    x$DateTimeOriginal,
-    x$group,
-    function(z){
-
-      z <- unique(z[!is.na(z)])
-
-      length(z) <= 1
-
-    }
-  )
-
-  flagged <- names(bad)[bad]
-
-  list(
-    passed = length(flagged) == 0,
-    flagged_groups = flagged
-  )
-
-}
 
 #' Identify invalid image datetimes
 #'
@@ -763,7 +750,6 @@ wt_print_datetime_report <- function(
     "Year check" = "year",
     "Month check" = "month",
     "January 1 check" = "jan1",
-    "Constant datetime check" = "constant",
     "Invalid datetime check" = "invalid"
   )
 
@@ -899,35 +885,41 @@ wt_print_datetime_report <- function(
 #' specified minimum year or in the future.
 #'
 #' @param x A data frame containing image datetime information, typically
-#'   produced by [wt_image_datetime()]. The data frame must contain
-#'   `DateTimeOriginal` as a `POSIXct` or `POSIXlt` object and a `group`
-#'   column identifying image groups (e.g., sites).
+#'   produced by [wt_image_datetime()]. The data frame must contain a
+#'   `DateTimeOriginal` column stored as a `POSIXct` or `POSIXlt` object and
+#'   a `group` column identifying image groups (e.g., sites).
 #' @param years Optional numeric vector specifying acceptable years.
-#'   Groups containing timestamps outside this range will be flagged.
+#'   Groups containing timestamps outside these years will be flagged.
 #' @param months Optional numeric vector specifying acceptable months
-#'   (1-12). Groups containing timestamps outside this range will be flagged.
+#'   (1--12). Groups containing timestamps outside these months will be
+#'   flagged.
 #' @param min_year Minimum acceptable year for image timestamps. Defaults to
-#'   1995 (when Exif data was first released)
+#'   1995, corresponding approximately to the introduction of Exif metadata.
 #' @param verbose Logical. Should the report include the names of groups with
 #'   detected issues? Defaults to `FALSE`, which prints only a compact summary
 #'   of checks and the number of groups with potential issues. When `TRUE`,
-#'   flagged groups are printed below each failed check. Flagged groups
-#'   can always be checked in the returned list object of this function,
-#'   if present.
+#'   flagged groups are printed below each failed check. Flagged groups can
+#'   also be accessed from the returned object.
 #'
 #' @details
 #' This function summarizes several common camera timestamp issues that can
-#' occur during wildlife camera deployments. These include incorrectly set
-#' camera clocks, uninitialized cameras, and timestamps outside the expected
-#' sampling period.
+#' occur during wildlife camera deployments, including incorrectly set camera
+#' clocks, uninitialized cameras, and timestamps outside the expected sampling
+#' period.
 #'
-#' The function prints a summary of detected issues and invisibly returns a
-#' list containing the results of each individual check.
+#' The function prints a summary of the quality checks and invisibly returns
+#' the complete results. The returned object can be supplied directly to
+#' [wt_datetime_followup()] to extract exact datetimes and further investigate
+#' groups that failed one or more checks.
 #'
 #' @return
-#' Invisibly returns a list containing the results of each quality control
-#' check. Each check contains logical information indicating whether the check
-#' passed and the groups containing potential issues.
+#' Invisibly returns a named list. Each quality check contains the check
+#' result (`passed`) and the groups flagged by that check. The returned object
+#' also contains a `check_arguments` element recording the values of
+#' `years`, `months`, `min_year`, and the maximum allowable datetime used when
+#' the checks were performed. These are retained so that
+#' [wt_datetime_followup()] can reproduce the same quality checks on the full
+#' set of image datetimes.
 #'
 #' @examples
 #' \dontrun{
@@ -936,11 +928,11 @@ wt_print_datetime_report <- function(
 #'
 #' datetime <- wt_image_datetime(
 #'   imgs,
-#'   group = 1,
+#'   group = site,
 #'   tz = "US/Central"
 #' )
 #'
-#' wt_image_check(
+#' checks <- wt_image_check(
 #'   datetime,
 #'   years = 2024,
 #'   months = 5:10
@@ -990,12 +982,15 @@ wt_image_check <- function(
     jan1 = wt_check_datetime_jan1(
       x
     ),
-    constant = wt_check_datetime_constant(
-      x
-    ),
     invalid = wt_check_invalid_datetime(
       x,
       min_year = min_year
+    ),
+    check_arguments = list(
+      years = years,
+      months = months,
+      min_year = min_year,
+      max_year = Sys.time()
     )
   )
 
@@ -1007,3 +1002,374 @@ wt_image_check <- function(
   invisible(results)
 
 }
+
+
+
+#' Investigate groups with datetime quality issues
+#'
+#' Extracts EXIF datetimes for groups flagged by [wt_image_check()] and
+#' summarizes the extent of datetime issues within each group. This function
+#' helps distinguish between deployment-level datetime errors, where all images
+#' in a group are affected, and image-level errors that require inspection of
+#' individual photographs.
+#'
+#' @param check The output from [wt_image_check()].
+#' @param paths A character vector of image file paths, typically produced by
+#'   [wt_image_paths()].
+#' @param group A character vector or factor identifying image groups (e.g.,
+#'   sites), typically produced by [wt_extract_folder_level()]. Must have the
+#'   same length as `paths`.
+#' @param tz Character string specifying the timezone used when converting EXIF
+#'   timestamps to datetime objects. Must be one of the timezones returned by
+#'   [OlsonNames()].
+#'
+#' @details
+#' This function is intended to be run after [wt_image_check()] identifies one
+#' or more groups with potential datetime problems. Exact EXIF datetimes are
+#' extracted for all images within flagged groups and re-evaluated using the
+#' same quality-control criteria supplied to [wt_image_check()].
+#'
+#' The returned summary reports the number of images in each flagged group,
+#' the earliest and latest timestamps, the deployment duration in days, the
+#' number of images with one or more datetime errors, and whether every image
+#' in the group contains a datetime error. Groups where every image is flagged
+#' often indicate a deployment-level camera clock issue, whereas groups with
+#' only a subset of flagged images typically require manual inspection of
+#' individual photographs.
+#'
+#' @return
+#' A list containing:
+#' \itemize{
+#'   \item `summary`: A data frame with one row per flagged group containing
+#'   the group identifier, earliest and latest image datetime, deployment
+#'   duration (days), number of images, number of images with datetime errors,
+#'   and whether all images in the group were flagged.
+#'   \item `datetime`: The output from [wt_image_datetime()] for all images in
+#'   the flagged groups.
+#' }
+#'
+#' @examples
+#' \dontrun{
+#'
+#' imgs <- wt_image_paths("my_sample")
+#'
+#' site <- wt_extract_folder_level(
+#'   imgs,
+#'   level = 1
+#' )
+#'
+#' datetime <- wt_image_datetime(
+#'   imgs,
+#'   group = site,
+#'   tz = "US/Central"
+#' )
+#'
+#' check <- wt_image_check(
+#'   datetime,
+#'   years = 2024,
+#'   months = 5:10
+#' )
+#'
+#' followup <- wt_datetime_followup(
+#'   check,
+#'   imgs,
+#'   site,
+#'   tz = "US/Central"
+#' )
+#'
+#' followup$summary
+#'
+#' }
+#'
+#' @export
+wt_datetime_followup <- function(
+    check,
+    paths,
+    group,
+    tz
+){
+
+  if(!is.list(check) ||
+     is.null(check$check_arguments)){
+    stop(
+      "`check` must be the output from `wt_image_check()`.",
+      call. = FALSE
+    )
+  }
+
+  if(!is.character(paths)){
+    stop(
+      "`paths` must be a character vector.",
+      call. = FALSE
+    )
+  }
+
+  if(length(paths) != length(group)){
+    stop(
+      "`group` must have the same length as `paths`.",
+      call. = FALSE
+    )
+  }
+
+  if(!is.character(group) && !is.factor(group)){
+    stop(
+      "`group` must be a character vector or factor.",
+      call. = FALSE
+    )
+  }
+
+  group <- as.factor(group)
+
+  if(!is.character(tz) ||
+     length(tz) != 1 ||
+     !tz %in% OlsonNames()){
+    stop(
+      "`tz` must be a valid timezone represented in `OlsonNames()`.",
+      call. = FALSE
+    )
+  }
+
+  flagged_groups <- unique(
+    unlist(
+      lapply(
+        check[names(check) != "check_arguments"],
+        function(x){
+
+          groups <- character(0)
+
+          if("flagged_groups" %in% names(x)){
+            groups <- c(
+              groups,
+              x$flagged_groups
+            )
+          }
+
+          if("early_groups" %in% names(x)){
+            groups <- c(
+              groups,
+              x$early_groups
+            )
+          }
+
+          if("future_groups" %in% names(x)){
+            groups <- c(
+              groups,
+              x$future_groups
+            )
+          }
+
+          groups
+
+        }
+      ),
+      use.names = FALSE
+    )
+  )
+
+  if(length(flagged_groups) == 0){
+
+    message(
+      "No flagged groups found."
+    )
+
+    return(
+      list(
+        summary = NULL,
+        datetime = NULL,
+        flagged_groups = character(0)
+      )
+    )
+  }
+
+  idx <- group %in% flagged_groups
+  tmp_group <- factor(
+    group[idx]
+  )
+
+  cat(
+    paste0(
+      "Pulling datetime data from ",
+      length(idx), " images...\n"
+    )
+  )
+
+  datetime <- wt_image_datetime(
+    paths[idx],
+    method = "exact",
+    group = tmp_group,
+    tz = tz
+  )
+
+  datetime$group <- factor(
+    datetime$group
+  )
+
+  args <- check$check_arguments
+
+  summary <- data.frame(
+    group = unique(
+      as.character(datetime$group)
+    )
+  )
+
+  # Add min / max datetime from image set
+  summary$min_datetime <- as.POSIXct(
+    tapply(
+      datetime$DateTimeOriginal,
+      datetime$group,
+      min,
+      na.rm = TRUE
+    ),
+    tz = tz
+  )
+
+  summary$max_datetime <- as.POSIXct(
+    tapply(
+      datetime$DateTimeOriginal,
+      datetime$group,
+      max,
+      na.rm = TRUE
+    ),
+    tz = tz
+  )
+
+  # how long was deployment, based on min/max
+  summary$datetime_range_days <- as.numeric(
+    difftime(
+      summary$max_datetime,
+      summary$min_datetime,
+      units = "days"
+    )
+  )
+
+  # Check for year errors if year is available
+  #  across all images.
+  if(!is.null(args$years)){
+    yr_errors <- !as.integer(format(datetime$DateTimeOriginal, "%Y")) %in%
+      args$years
+  } else {
+    yr_errors <- rep(
+      FALSE,
+      nrow(datetime)
+    )
+  }
+  # Check for month errors if months are available
+  #  across all images
+  if(!is.null(args$months)){
+    month_errors <- !as.integer(format(datetime$DateTimeOriginal, "%m")) %in%
+      args$months
+  } else {
+    month_errors <- rep(
+      FALSE,
+      nrow(datetime)
+    )
+  }
+  # check the first image to see if it
+  #  is a Jan 1. deployment.
+  jan1_error_check <- wt_check_datetime_jan1(
+    datetime
+  )
+  jan1_error <- rep(
+    FALSE,
+    nrow(datetime)
+  )
+  if(!jan1_error_check$passed){
+
+    err_locs <- sapply(
+      jan1_error_check$flagged_groups,
+      function(x){
+        min(
+          which(
+            datetime$group %in% x
+          )
+        )
+      }
+    )
+    jan1_error[err_locs] <- TRUE
+  }
+  # check for invalid datetimes as well
+  invalid_yr_errors <- as.integer(format(datetime$DateTimeOriginal, "%Y")) <
+    args$min_year | datetime$DateTimeOriginal > args$max_year
+
+  error_sum <- yr_errors + month_errors +
+    jan1_error + invalid_yr_errors
+
+  error_sum[error_sum>1] <- 1
+
+  # number of photos per deployment
+  summary$n_images <- as.integer(
+    table(datetime$group)[summary$group]
+  )
+  # how many with errors?
+  summary$n_images_with_error <- tapply(
+    error_sum,
+    datetime$group,
+    sum
+  )
+  # is it a deployment wide error?
+  summary$all_images_flagged <- as.integer(summary$n_images) ==
+    as.integer(summary$n_images_with_error)
+
+  cat("\nDatetime follow-up\n")
+  cat("==================\n\n")
+
+  cat(
+    sprintf(
+      "Groups investigated: %i\n\n",
+      nrow(summary)
+    )
+  )
+
+  cat(
+    sprintf(
+      "Deployment-level issues: %i\n",
+      n_deployment
+    )
+  )
+
+  cat(
+    sprintf(
+      "Image-level issues:      %i\n\n",
+      n_individual
+    )
+  )
+
+  cat("Affected groups:\n\n")
+  tmp <- summary[,c(
+    "group",
+    "n_images",
+    "n_images_with_error",
+    "all_images_flagged"
+  )]
+  colnames(tmp) <- c("Groups", "Images", "Errors",
+                     "Scope")
+  tmp$Scope <- c("Individual", "Deployment")[
+    as.numeric(tmp$Scope) + 1
+  ]
+  print(
+    tmp,
+    row.names = FALSE
+  )
+
+  cat(
+    "\nThe complete summary is available in:\n",
+    "  result$summary\n"
+  )
+
+  cat(
+    "Image-level datetime information is available in:\n",
+    "  result$datetime\n\n"
+  )
+
+  list(
+    summary = summary,
+    datetime = datetime
+  )
+
+  list(
+    summary = summary,
+    datetime = datetime
+  )
+
+}
+
